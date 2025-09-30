@@ -145,7 +145,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <NavSection>
           <NavLink to="/" $active={location.pathname === '/'}>
             <span>📊</span>
-            Today's Tasks
+            Dashboard
+          </NavLink>
+          <NavLink to="/friends" $active={location.pathname === '/friends'}>
+            <span>👥</span>
+            Friends & Groups
           </NavLink>
           <NavLink to="/history" $active={location.pathname === '/history'}>
             <span>📈</span>
@@ -153,7 +157,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </NavLink>
           <NavLink to="/setup" $active={location.pathname === '/setup'}>
             <span>⚙️</span>
-            Partner Settings
+            Settings
           </NavLink>
         </NavSection>
         

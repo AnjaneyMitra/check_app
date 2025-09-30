@@ -6,7 +6,7 @@ import Layout from './components/Layout';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import History from './components/History';
-import PartnerSetup from './components/PartnerSetup';
+import FriendsGroups from './components/FriendsGroups';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
@@ -32,10 +32,17 @@ function App() {
                   </Layout>
                 </ProtectedRoute>
               } />
+              <Route path="/friends" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <FriendsGroups />
+                  </Layout>
+                </ProtectedRoute>
+              } />
               <Route path="/setup" element={
                 <ProtectedRoute>
                   <Layout>
-                    <PartnerSetup />
+                    <FriendsGroups />
                   </Layout>
                 </ProtectedRoute>
               } />

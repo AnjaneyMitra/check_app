@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { apiService, Task } from '../services/api';
+import { apiService, Task, Friend, Group, MotivationalNote } from '../services/api';
 
 const DashboardContainer = styled.div`
   display: flex;
@@ -316,30 +316,132 @@ const SmallButton = styled.button`
   }
 `;
 
+const Select = styled.select`
+  padding: 8px 12px;
+  border: 1px solid #d9d9d7;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #ffffff;
+  color: #37352f;
+  
+  &:focus {
+    outline: none;
+    border-color: #37352f;
+    box-shadow: 0 0 0 1px #37352f;
+  }
+`;
+
+const FriendCard = styled.div`
+  padding: 16px;
+  border: 1px solid #e9e9e7;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  background: #ffffff;
+`;
+
+const FriendHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+`;
+
+const FriendName = styled.h4`
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #37352f;
+`;
+
+const NotificationBadge = styled.span`
+  background: #37352f;
+  color: white;
+  border-radius: 10px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 8px;
+`;
+
+const QuickStats = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+`;
+
+const StatCard = styled.div`
+  background: #ffffff;
+  border: 1px solid #e9e9e7;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+`;
+
+const StatNumber = styled.div`
+  font-size: 24px;
+  font-weight: 600;
+  color: #37352f;
+  margin-bottom: 4px;
+`;
+
+const StatLabel = styled.div`
+  font-size: 12px;
+  color: #787774;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
 const Dashboard: React.FC = () => {
   const [myTasks, setMyTasks] = useState<Task[]>([]);
-  const [partnerTasks, setPartnerTasks] = useState<Task[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [friendTasks, setFriendTasks] = useState<{ [key: string]: Task[] }>({});
+  const [motivationalNotes, setMotivationalNotes] = useState<MotivationalNote[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDescription, setNewTaskDescription] = useState('');
   const [motivationalNote, setMotivationalNote] = useState('');
+  const [selectedFriend, setSelectedFriend] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
-  const loadTasks = async () => {
+  const loadData = async () => {
     try {
-      const [myTasksData, partnerTasksData] = await Promise.all([
-        apiService.getTodayTasks(),
-        apiService.getPartnerTodayTasks()
-      ]);
-      
+      // Load user's tasks
+      const myTasksData = await apiService.getTodayTasks();
       setMyTasks(myTasksData.tasks || []);
-      setPartnerTasks(partnerTasksData.tasks || []);
+      
+      // Load friends
+      const friendsData = await apiService.getFriends();
+      setFriends(friendsData.friends || []);
+      
+      // Load groups
+      const groupsData = await apiService.getGroups();
+      setGroups(groupsData.groups || []);
+      
+      // Load friend tasks using friends progress endpoint
+      const friendTasksData: { [key: string]: Task[] } = {};
+      for (const friend of (friendsData.friends || [])) {
+        try {
+          const progressData = await apiService.getFriendsProgress();
+          const friendProgress = progressData.friends_progress?.find((fp: any) => fp.friend.id === friend.id);
+          friendTasksData[friend.id] = friendProgress?.tasks || [];
+        } catch (error) {
+          friendTasksData[friend.id] = [];
+        }
+      }
+      setFriendTasks(friendTasksData);
+      
+      // Load motivational notes
+      const notesData = await apiService.getMotivationalNotes();
+      setMotivationalNotes(notesData.notes || []);
+      
     } catch (error) {
-      console.error('Failed to load tasks:', error);
+      console.error('Failed to load data:', error);
     }
   };
 
   useEffect(() => {
-    loadTasks();
+    loadData();
   }, []);
 
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -351,7 +453,7 @@ const Dashboard: React.FC = () => {
       await apiService.createTask(newTaskTitle, newTaskDescription);
       setNewTaskTitle('');
       setNewTaskDescription('');
-      await loadTasks();
+      await loadData();
     } catch (error) {
       console.error('Failed to create task:', error);
     } finally {
@@ -361,8 +463,8 @@ const Dashboard: React.FC = () => {
 
   const handleToggleTask = async (taskId: string, completed: boolean) => {
     try {
-      await apiService.updateTask(taskId, !completed);
-      await loadTasks();
+      await apiService.updateTask(taskId, { completed: !completed });
+      await loadData();
     } catch (error) {
       console.error('Failed to update task:', error);
     }
@@ -373,7 +475,7 @@ const Dashboard: React.FC = () => {
 
     try {
       await apiService.deleteTask(taskId);
-      await loadTasks();
+      await loadData();
     } catch (error) {
       console.error('Failed to delete task:', error);
     }
@@ -381,12 +483,13 @@ const Dashboard: React.FC = () => {
 
   const handleSendMotivationalNote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!motivationalNote.trim()) return;
+    if (!motivationalNote.trim() || !selectedFriend) return;
 
     try {
-      await apiService.sendMotivationalNote(motivationalNote);
+      await apiService.sendMotivationalNote(selectedFriend, motivationalNote);
       setMotivationalNote('');
-      alert('Motivational note sent to your partner! 🎉');
+      alert('Motivational note sent! 🎉');
+      await loadData();
     } catch (error) {
       console.error('Failed to send note:', error);
     }
@@ -399,7 +502,6 @@ const Dashboard: React.FC = () => {
   };
 
   const myProgress = calculateProgress(myTasks);
-  const partnerProgress = calculateProgress(partnerTasks);
 
   const renderCheckbox = (checked: boolean, onChange: () => void) => (
     <CheckboxContainer>
@@ -417,6 +519,26 @@ const Dashboard: React.FC = () => {
 
   return (
     <DashboardContainer>
+      {/* Quick Stats */}
+      <QuickStats>
+        <StatCard>
+          <StatNumber>{myTasks.filter(t => t.completed).length}/{myTasks.length}</StatNumber>
+          <StatLabel>My Tasks Today</StatLabel>
+        </StatCard>
+        <StatCard>
+          <StatNumber>{friends.length}</StatNumber>
+          <StatLabel>Friends</StatLabel>
+        </StatCard>
+        <StatCard>
+          <StatNumber>{groups.length}</StatNumber>
+          <StatLabel>Groups</StatLabel>
+        </StatCard>
+        <StatCard>
+          <StatNumber>{motivationalNotes.filter(n => !n.read).length}</StatNumber>
+          <StatLabel>Unread Notes</StatLabel>
+        </StatCard>
+      </QuickStats>
+
       {/* My Tasks Section */}
       <Section>
         <SectionTitle>
@@ -480,63 +602,151 @@ const Dashboard: React.FC = () => {
         </TaskList>
       </Section>
 
-      {/* Partner's Tasks Section */}
-      <Section>
-        <SectionTitle>
-          <span>👥</span>
-          Partner's Progress
-        </SectionTitle>
-        
-        <ProgressSection>
-          <Stats>
-            <span>{partnerTasks.filter(t => t.completed).length} of {partnerTasks.length} completed</span>
-            <span>{partnerProgress}%</span>
-          </Stats>
-          <ProgressBar>
-            <ProgressFill $percentage={partnerProgress} />
-          </ProgressBar>
-        </ProgressSection>
-
-        <TaskList>
-          {partnerTasks.length === 0 ? (
-            <EmptyState>Your partner hasn't added tasks yet today</EmptyState>
-          ) : (
-            partnerTasks.map((task) => (
-              <TaskItem key={task.id} $completed={task.completed}>
-                <CheckboxContainer>
-                  <StyledCheckbox $checked={task.completed}>
-                    <CheckIcon $checked={task.completed} viewBox="0 0 24 24">
-                      <polyline points="20,6 9,17 4,12" />
-                    </CheckIcon>
-                  </StyledCheckbox>
-                </CheckboxContainer>
-                <TaskContent>
-                  <TaskTitle $completed={task.completed}>{task.title}</TaskTitle>
-                  {task.description && (
-                    <TaskDescription $completed={task.completed}>
-                      {task.description}
-                    </TaskDescription>
+      {/* Friends Section */}
+      {friends.length > 0 && (
+        <Section>
+          <SectionTitle>
+            <span>👥</span>
+            Friends Progress
+          </SectionTitle>
+          
+          <TaskList>
+            {friends.map((friend) => {
+              const tasks = friendTasks[friend.id] || [];
+              const progress = calculateProgress(tasks);
+              return (
+                <FriendCard key={friend.id}>
+                  <FriendHeader>
+                    <FriendName>
+                      {friend.display_name || friend.username || friend.email}
+                    </FriendName>
+                    <Stats>
+                      <span>{tasks.filter(t => t.completed).length}/{tasks.length}</span>
+                      <span>{progress}%</span>
+                    </Stats>
+                  </FriendHeader>
+                  <ProgressBar>
+                    <ProgressFill $percentage={progress} />
+                  </ProgressBar>
+                  {tasks.length > 0 && (
+                    <div style={{ marginTop: '12px' }}>
+                      {tasks.slice(0, 3).map((task) => (
+                        <TaskItem key={task.id} $completed={task.completed}>
+                          <CheckboxContainer>
+                            <StyledCheckbox $checked={task.completed}>
+                              <CheckIcon $checked={task.completed} viewBox="0 0 24 24">
+                                <polyline points="20,6 9,17 4,12" />
+                              </CheckIcon>
+                            </StyledCheckbox>
+                          </CheckboxContainer>
+                          <TaskContent>
+                            <TaskTitle $completed={task.completed}>{task.title}</TaskTitle>
+                            {task.description && (
+                              <TaskDescription $completed={task.completed}>
+                                {task.description}
+                              </TaskDescription>
+                            )}
+                          </TaskContent>
+                        </TaskItem>
+                      ))}
+                      {tasks.length > 3 && (
+                        <div style={{ fontSize: '12px', color: '#787774', textAlign: 'center', marginTop: '8px' }}>
+                          +{tasks.length - 3} more tasks
+                        </div>
+                      )}
+                    </div>
                   )}
+                </FriendCard>
+              );
+            })}
+          </TaskList>
+
+          <MotivationalSection>
+            <MotivationalTitle>💪 Send Encouragement</MotivationalTitle>
+            <NoteForm onSubmit={handleSendMotivationalNote}>
+              <Select
+                value={selectedFriend}
+                onChange={(e) => setSelectedFriend(e.target.value)}
+                required
+              >
+                <option value="">Select a friend...</option>
+                {friends.map((friend) => (
+                  <option key={friend.id} value={friend.id}>
+                    {friend.display_name || friend.username || friend.email}
+                  </option>
+                ))}
+              </Select>
+              <NoteInput
+                type="text"
+                placeholder="Send a motivational note..."
+                value={motivationalNote}
+                onChange={(e) => setMotivationalNote(e.target.value)}
+                required
+              />
+              <SmallButton type="submit">Send</SmallButton>
+            </NoteForm>
+          </MotivationalSection>
+        </Section>
+      )}
+
+      {/* Groups Section */}
+      {groups.length > 0 && (
+        <Section>
+          <SectionTitle>
+            <span>👥</span>
+            My Groups
+          </SectionTitle>
+          
+          <TaskList>
+            {groups.map((group) => (
+              <FriendCard key={group.id}>
+                <FriendHeader>
+                  <FriendName>{group.name}</FriendName>
+                  <Stats>
+                    <span>{group.members.length} members</span>
+                  </Stats>
+                </FriendHeader>
+                {group.description && (
+                  <TaskDescription style={{ marginBottom: '12px' }}>
+                    {group.description}
+                  </TaskDescription>
+                )}
+              </FriendCard>
+            ))}
+          </TaskList>
+        </Section>
+      )}
+
+      {/* Motivational Notes Section */}
+      {motivationalNotes.length > 0 && (
+        <Section>
+          <SectionTitle>
+            <span>💝</span>
+            Recent Messages
+            {motivationalNotes.filter(n => !n.read).length > 0 && (
+              <NotificationBadge>
+                {motivationalNotes.filter(n => !n.read).length}
+              </NotificationBadge>
+            )}
+          </SectionTitle>
+          
+          <TaskList>
+            {motivationalNotes.slice(0, 5).map((note) => (
+              <TaskItem key={note.id}>
+                <TaskContent>
+                  <TaskTitle style={{ fontWeight: note.read ? 'normal' : 'bold' }}>
+                    {note.message}
+                  </TaskTitle>
+                  <TaskDescription>
+                    {new Date(note.created_at).toLocaleDateString()} 
+                    {note.group_id && ' • Group message'}
+                  </TaskDescription>
                 </TaskContent>
               </TaskItem>
-            ))
-          )}
-        </TaskList>
-
-        <MotivationalSection>
-          <MotivationalTitle>💪 Send Encouragement</MotivationalTitle>
-          <NoteForm onSubmit={handleSendMotivationalNote}>
-            <NoteInput
-              type="text"
-              placeholder="Send a motivational note..."
-              value={motivationalNote}
-              onChange={(e) => setMotivationalNote(e.target.value)}
-              required
-            />
-            <SmallButton type="submit">Send</SmallButton>
-          </NoteForm>
-        </MotivationalSection>
-      </Section>
+            ))}
+          </TaskList>
+        </Section>
+      )}
     </DashboardContainer>
   );
 };

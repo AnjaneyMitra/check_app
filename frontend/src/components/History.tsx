@@ -176,7 +176,7 @@ const History: React.FC = () => {
     const loadHistory = async () => {
       try {
         const data = await apiService.getUserHistory();
-        setHistory(data.history || []);
+        setHistory(data || []);
       } catch (error) {
         console.error('Failed to load history:', error);
       } finally {

@@ -1,46 +1,68 @@
 # Daily Check-In Task Tracker
 
-The Daily Check-In Task Tracker is a collaborative web application designed for two people to stay accountable and consistent in completing their daily goals. It provides a simple daily task list that resets automatically each day, while also maintaining a history of task completion that can be tracked by both participants.
+The Daily Check-In Task Tracker is a collaborative web application designed for individuals and groups to stay accountable and consistent in completing their daily goals. It provides both individual task tracking and group-based accountability systems with shared goals and progress monitoring.
 
 ## Core Concept
 
-The app enables two users (partners, friends, colleagues, or accountability buddies) to:
+The app enables users to:
 
-- Set and track daily tasks
-- See each other's progress in real-time
+- Set and track individual daily tasks
+- Connect with multiple accountability partners/friends
+- Create and join groups for shared accountability
+- See friends' and group members' progress in real-time
 - View historical data to analyze past performance and consistency
-- Start fresh each day with a new tracker while maintaining archived records
+- Start fresh each day with new tasks while maintaining archived records
 
 ## Key Features
 
-### Two-User Focused
+### Multi-Partner & Group System
 
-- Designed specifically for two participants
-- Both users log in securely and are paired together
-- Each user can view their own and the other's daily progress
+#### Individual Friends/Partners
+- Users can add multiple friends as accountability partners
+- Send friend requests and manage friend connections
+- View individual friends' progress and send encouragement
+
+#### Group Feature
+- **Group Creation**: Users can create groups with custom names and descriptions
+- **Group Management**: Group hosts can invite/remove members, set group tasks
+- **Shared Goals**: Groups can have common tasks that all members work towards
+- **Group Progress**: Real-time view of all group members' progress
+- **Group Chat**: Send motivational messages and celebrate achievements together
 
 ### Daily Task Management
 
-- Users can add tasks at the start of the day
+#### Personal Tasks
+- Users can add unlimited personal tasks each day
 - Each task has a status (pending ⏳ or completed ✅)
+- Optional task descriptions and priority levels
 - Progress updates sync in real-time using Firebase
 
-### Accountability & Check-Ins
+#### Group Tasks
+- Group hosts can create shared tasks for all members
+- Members can suggest tasks for group adoption
+- Individual progress on group tasks is visible to all members
 
-- Users can see live updates when their partner completes a task
-- Encouragement features: leave motivational notes or quick reactions
+### Social Accountability Features
+
+- **Friends Dashboard**: View all friends' daily progress in one place
+- **Group Dashboard**: See group-wide progress and leaderboards
+- **Motivational System**: Send notes, reactions, and encouragement
+- **Achievement Celebrations**: Automatic notifications for milestones
+- **Streak Tracking**: Individual and group streak counters
 
 ### Automatic Daily Reset
 
 - At midnight (or configurable reset time), the current day's tasks reset
 - Completed tasks are archived into history before reset
 
-### Task History & Tracking
+### Advanced Analytics & History
 
-- Both users can access a history dashboard
-- Shows each day's completed vs. pending tasks
-- Includes streaks, percentage completion, and comparative progress
-- History is visible to both parties for transparency
+- **Personal History**: Individual progress tracking with detailed analytics
+- **Friend Comparisons**: Compare progress with specific friends over time
+- **Group Analytics**: Group performance metrics and member rankings
+- **Streak Analysis**: Track personal and group streaks
+- **Achievement System**: Badges for consistency, helping others, group leadership
+- **Export Data**: Download personal or group progress reports
 
 ### Notifications & Reminders (Optional)
 
@@ -77,19 +99,37 @@ The app enables two users (partners, friends, colleagues, or accountability budd
 - Python backend hosted on **Railway/Render/Heroku** or **Firebase Functions**
 - Firestore provides real-time database and scaling
 
-## User Flow
+## User Flows
 
-1. **Login** – Both users authenticate via Firebase Auth
-2. **Task Entry** – Each user adds daily tasks in the React UI
-3. **Real-Time Progress** – As users complete tasks, updates are visible instantly
-4. **Check-In** – Users see partner's completion status and add encouragement if desired
-5. **Daily Reset & Archive** – At reset time, tasks are cleared from the active list and stored in history
-6. **History Dashboard** – Users can review past days, compare performance, and track streaks
+### Individual User Flow
+1. **Login** – User authenticates via Firebase Auth
+2. **Dashboard** – View personal tasks, friends' progress, and group updates
+3. **Task Management** – Add, complete, and manage daily tasks
+4. **Social Features** – Connect with friends, join groups, send encouragement
+
+### Friend System Flow
+1. **Find Friends** – Search users by email or username
+2. **Send Requests** – Send friend requests and manage connections
+3. **Friend Dashboard** – Monitor friends' daily progress
+4. **Encouragement** – Send motivational notes and reactions
+
+### Group System Flow
+1. **Create/Join Groups** – Start new groups or join existing ones via invite codes
+2. **Group Management** – Hosts manage members, set group tasks, moderate discussions
+3. **Participate** – Complete personal and group tasks, engage in group chat
+4. **Track Progress** – Monitor individual and group-wide achievements
+
+### Daily Reset & Archive
+- At midnight, active tasks archive to history
+- Group and individual streaks update automatically
+- Daily/weekly summary notifications sent to users and groups
 
 ## Benefits
 
-- Encourages daily accountability between two people
-- Helps build habits with visible progress tracking
-- Transparency through shared history builds trust
-- Simple, modern, and scalable with React + Python + Firebase
-- Can be extended later with gamification (badges, rewards), analytics, or social features
+- **Scalable Accountability**: Connect with multiple friends and join various groups
+- **Flexible Engagement**: Choose individual focus, friend partnerships, or group challenges
+- **Enhanced Motivation**: Group dynamics and social features boost engagement
+- **Community Building**: Groups foster shared goals and mutual support
+- **Comprehensive Tracking**: Multi-level analytics from personal to group performance
+- **Gamification Ready**: Built-in achievement system and competitive elements
+- **Modern & Social**: Combines habit tracking with social networking principles

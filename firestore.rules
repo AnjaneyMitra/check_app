@@ -12,13 +12,18 @@ service cloud.firestore {
       return request.auth.uid == userId;
     }
     
-    function isPartner(userId) {
-      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.partner_id == userId;
+    function isFriend(userId) {
+      return exists(/databases/$(database)/documents/friendships/$(request.auth.uid + '_' + userId)) ||
+             exists(/databases/$(database)/documents/friendships/$(userId + '_' + request.auth.uid));
     }
     
-    function isOwnerOrPartner(userId) {
-      return isOwner(userId) || isPartner(userId);
+    function isGroupMember(groupId) {
+      return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+    }
+    
+    function isGroupHost(groupId) {
+      return exists(/databases/$(database)/documents/groups/$(groupId)) &&
+             get(/databases/$(database)/documents/groups/$(groupId)).data.host_id == request.auth.uid;
     }
     
     function hasValidUserData() {
@@ -28,7 +33,7 @@ service cloud.firestore {
              data.email.size() > 0 &&
              data.created_at != null &&
              (!('display_name' in data) || data.display_name is string) &&
-             (!('partner_id' in data) || data.partner_id is string);
+             (!('username' in data) || (data.username is string && data.username.size() <= 50));
     }
     
     function hasValidTaskData() {
@@ -42,36 +47,24 @@ service cloud.firestore {
              data.created_at != null &&
              (!('description' in data) || 
               (data.description is string && data.description.size() <= 500)) &&
+             (!('group_id' in data) || data.group_id is string) &&
+             (!('priority' in data) || data.priority in ['low', 'medium', 'high']) &&
              (!('updated_at' in data) || data.updated_at != null);
     }
     
-    function hasValidHistoryData() {
+    function hasValidGroupData() {
       let data = request.resource.data;
-      return data.keys().hasAll(['date', 'total_tasks', 'completed_tasks', 'completion_percentage', 'created_at']) &&
-             data.date is string &&
-             data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
-             data.total_tasks is int &&
-             data.total_tasks >= 0 &&
-             data.completed_tasks is int &&
-             data.completed_tasks >= 0 &&
-             data.completed_tasks <= data.total_tasks &&
-             data.completion_percentage is number &&
-             data.completion_percentage >= 0 &&
-             data.completion_percentage <= 100 &&
-             data.created_at != null;
-    }
-    
-    function hasValidNoteData() {
-      let data = request.resource.data;
-      return data.keys().hasAll(['from_user_id', 'to_user_id', 'message', 'created_at']) &&
-             data.from_user_id == request.auth.uid &&
-             data.to_user_id is string &&
-             data.to_user_id != request.auth.uid &&
-             data.message is string &&
-             data.message.size() > 0 &&
-             data.message.size() <= 500 &&
+      return data.keys().hasAll(['name', 'host_id', 'created_at']) &&
+             data.name is string &&
+             data.name.size() > 0 &&
+             data.name.size() <= 100 &&
+             data.host_id == request.auth.uid &&
              data.created_at != null &&
-             (!('read' in data) || data.read is bool);
+             (!('description' in data) || 
+              (data.description is string && data.description.size() <= 500)) &&
+             (!('invite_code' in data) || 
+              (data.invite_code is string && data.invite_code.size() == 8)) &&
+             (!('is_private' in data) || data.is_private is bool);
     }
     
     function isValidDate(dateString) {
@@ -79,9 +72,9 @@ service cloud.firestore {
              dateString.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
     }
     
-    // Users collection - user profiles and partner relationships
+    // Users collection - user profiles
     match /users/{userId} {
-      allow read: if isAuthenticated() && isOwnerOrPartner(userId);
+      allow read: if isAuthenticated() && (isOwner(userId) || isFriend(userId));
       allow create: if isAuthenticated() && 
                        isOwner(userId) && 
                        hasValidUserData();
@@ -94,7 +87,7 @@ service cloud.firestore {
       
       // User's daily tasks subcollection
       match /daily_tasks/{date}/tasks/{taskId} {
-        allow read: if isAuthenticated() && isOwnerOrPartner(userId);
+        allow read: if isAuthenticated() && (isOwner(userId) || isFriend(userId));
         allow create: if isAuthenticated() && 
                          isOwner(userId) && 
                          hasValidTaskData() &&
@@ -103,7 +96,6 @@ service cloud.firestore {
                          isOwner(userId) && 
                          hasValidTaskData() &&
                          isValidDate(date) &&
-                         // Ensure user_id cannot be changed
                          request.resource.data.user_id == resource.data.user_id &&
                          request.resource.data.created_at == resource.data.created_at;
         allow delete: if isAuthenticated() && 
@@ -113,51 +105,117 @@ service cloud.firestore {
       
       // User's task history subcollection
       match /history/{historyDate} {
-        allow read: if isAuthenticated() && isOwnerOrPartner(userId);
+        allow read: if isAuthenticated() && (isOwner(userId) || isFriend(userId));
         allow create: if isAuthenticated() && 
-                         isOwner(userId) && 
-                         hasValidHistoryData() &&
+                         isOwner(userId) &&
                          historyDate == request.resource.data.date;
         allow update: if isAuthenticated() && 
-                         isOwner(userId) && 
-                         hasValidHistoryData() &&
-                         historyDate == request.resource.data.date &&
-                         // Ensure date cannot be changed
-                         request.resource.data.date == resource.data.date;
+                         isOwner(userId) &&
+                         historyDate == request.resource.data.date;
         allow delete: if false; // History entries should not be deleted
       }
     }
     
-    // Motivational notes collection
-    match /motivational_notes/{noteId} {
+    // Friend requests collection
+    match /friend_requests/{requestId} {
       allow read: if isAuthenticated() && (
-        // Users can read notes they sent
         resource.data.from_user_id == request.auth.uid ||
-        // Users can read notes sent to them
         resource.data.to_user_id == request.auth.uid
       );
-      
       allow create: if isAuthenticated() && 
-                       hasValidNoteData() &&
-                       // Ensure the sender can only send to their partner
-                       exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.partner_id == request.resource.data.to_user_id;
-      
+                       request.resource.data.from_user_id == request.auth.uid &&
+                       request.resource.data.to_user_id != request.auth.uid &&
+                       request.resource.data.status == 'pending';
       allow update: if isAuthenticated() && 
                        resource.data.to_user_id == request.auth.uid &&
-                       // Only allow updating the 'read' status
-                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
-                       request.resource.data.read is bool;
-      
+                       request.resource.data.status in ['accepted', 'rejected'];
       allow delete: if isAuthenticated() && (
-        // Users can delete notes they sent
         resource.data.from_user_id == request.auth.uid ||
-        // Users can delete notes sent to them
         resource.data.to_user_id == request.auth.uid
       );
     }
     
-    // Admin collection (for system operations like daily resets)
+    // Friendships collection
+    match /friendships/{friendshipId} {
+      allow read: if isAuthenticated() && (
+        friendshipId.matches('^' + request.auth.uid + '_.*') ||
+        friendshipId.matches('.*_' + request.auth.uid + '$')
+      );
+      allow create: if isAuthenticated() && (
+        friendshipId == request.auth.uid + '_' + request.resource.data.friend_id ||
+        friendshipId == request.resource.data.friend_id + '_' + request.auth.uid
+      );
+      allow delete: if isAuthenticated() && (
+        friendshipId.matches('^' + request.auth.uid + '_.*') ||
+        friendshipId.matches('.*_' + request.auth.uid + '$')
+      );
+    }
+    
+    // Groups collection
+    match /groups/{groupId} {
+      allow read: if isAuthenticated() && isGroupMember(groupId);
+      allow create: if isAuthenticated() && hasValidGroupData();
+      allow update: if isAuthenticated() && isGroupHost(groupId) && hasValidGroupData();
+      allow delete: if isAuthenticated() && isGroupHost(groupId);
+      
+      // Group members subcollection
+      match /members/{memberId} {
+        allow read: if isAuthenticated() && isGroupMember(groupId);
+        allow create: if isAuthenticated() && (
+          isGroupHost(groupId) || 
+          (memberId == request.auth.uid && request.resource.data.role == 'member')
+        );
+        allow update: if isAuthenticated() && isGroupHost(groupId);
+        allow delete: if isAuthenticated() && (
+          isGroupHost(groupId) || memberId == request.auth.uid
+        );
+      }
+      
+      // Group tasks subcollection
+      match /tasks/{taskId} {
+        allow read: if isAuthenticated() && isGroupMember(groupId);
+        allow create: if isAuthenticated() && (
+          isGroupHost(groupId) && request.resource.data.created_by == request.auth.uid
+        );
+        allow update: if isAuthenticated() && isGroupHost(groupId);
+        allow delete: if isAuthenticated() && isGroupHost(groupId);
+      }
+      
+      // Group messages subcollection
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && isGroupMember(groupId);
+        allow create: if isAuthenticated() && 
+                         isGroupMember(groupId) &&
+                         request.resource.data.user_id == request.auth.uid;
+        allow delete: if isAuthenticated() && (
+          isGroupHost(groupId) || 
+          request.resource.data.user_id == request.auth.uid
+        );
+      }
+    }
+    
+    // Motivational notes collection (now supports friends and group members)
+    match /motivational_notes/{noteId} {
+      allow read: if isAuthenticated() && (
+        resource.data.from_user_id == request.auth.uid ||
+        resource.data.to_user_id == request.auth.uid
+      );
+      allow create: if isAuthenticated() && 
+                       request.resource.data.from_user_id == request.auth.uid &&
+                       request.resource.data.to_user_id != request.auth.uid &&
+                       (isFriend(request.resource.data.to_user_id) || 
+                        (request.resource.data.group_id != null && 
+                         isGroupMember(request.resource.data.group_id)));
+      allow update: if isAuthenticated() && 
+                       resource.data.to_user_id == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAuthenticated() && (
+        resource.data.from_user_id == request.auth.uid ||
+        resource.data.to_user_id == request.auth.uid
+      );
+    }
+    
+    // Admin collection (for system operations)
     match /admin/{document} {
       allow read, write: if false; // No direct access - only via server functions
     }
