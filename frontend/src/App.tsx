@@ -6,7 +6,10 @@ import Layout from './components/Layout';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import History from './components/History';
-import FriendsGroups from './components/FriendsGroups';
+import Friends from './components/Friends';
+import Groups from './components/Groups';
+import FriendRequests from './components/FriendRequests';
+import Profile from './components/Profile';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
@@ -35,14 +38,35 @@ function App() {
               <Route path="/friends" element={
                 <ProtectedRoute>
                   <Layout>
-                    <FriendsGroups />
+                    <Friends />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/groups" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Groups />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/requests" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <FriendRequests />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/profile" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Profile />
                   </Layout>
                 </ProtectedRoute>
               } />
               <Route path="/setup" element={
                 <ProtectedRoute>
                   <Layout>
-                    <FriendsGroups />
+                    <Profile />
                   </Layout>
                 </ProtectedRoute>
               } />

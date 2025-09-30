@@ -130,7 +130,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       await logout();
       navigate('/login');
     } catch (error) {
-      console.error('Failed to log out', error);
+      console.error("Failed to log out", error);
     }
   };
 
@@ -138,43 +138,52 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     <LayoutContainer>
       <Sidebar>
         <Logo>
-          <span>📋</span>
-          Daily Check-In
+          <span>✅</span>
+          <span>Check</span>
         </Logo>
-        
         <NavSection>
           <NavLink to="/" $active={location.pathname === '/'}>
-            <span>📊</span>
+            <span>🏠</span>
             Dashboard
           </NavLink>
-          <NavLink to="/friends" $active={location.pathname === '/friends'}>
-            <span>👥</span>
-            Friends & Groups
-          </NavLink>
           <NavLink to="/history" $active={location.pathname === '/history'}>
-            <span>📈</span>
-            Progress History
+            <span>📜</span>
+            History
           </NavLink>
-          <NavLink to="/setup" $active={location.pathname === '/setup'}>
-            <span>⚙️</span>
-            Settings
+          <NavLink to="/friends" $active={location.pathname === '/friends'}>
+            <span>🧑‍🤝‍🧑</span>
+            Friends
+          </NavLink>
+          <NavLink to="/groups" $active={location.pathname === '/groups'}>
+            <span>🏢</span>
+            Groups
+          </NavLink>
+          <NavLink to="/requests" $active={location.pathname === '/requests'}>
+            <span>📥</span>
+            Requests
           </NavLink>
         </NavSection>
-        
         <UserSection>
-          <UserInfo>
-            Signed in as {currentUser?.email}
-          </UserInfo>
+          {currentUser && (
+            <UserInfo>
+              Logged in as {currentUser.email}
+            </UserInfo>
+          )}
+          <NavLink 
+            to="/profile" 
+            $active={location.pathname.startsWith('/profile') || location.pathname.startsWith('/setup')}
+            style={{ padding: '6px 0', marginBottom: '8px', justifyContent: 'center', border: '1px solid #e9e9e7', borderRadius: '6px' }}
+          >
+            <span>👤</span>
+            My Profile
+          </NavLink>
           <LogoutButton onClick={handleLogout}>
-            Sign Out
+            Log Out
           </LogoutButton>
         </UserSection>
       </Sidebar>
-      
       <Main>
-        <ContentArea>
-          {children}
-        </ContentArea>
+        {children}
       </Main>
     </LayoutContainer>
   );
