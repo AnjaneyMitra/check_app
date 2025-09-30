@@ -39,9 +39,9 @@ app = FastAPI(title="Daily Check-In Task Tracker API - Multi-Partner & Groups", 
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -114,6 +114,25 @@ class GroupTaskCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     priority: Optional[str] = Field("medium", pattern="^(low|medium|high)$")
 
+# New request models for JSON bodies expected by frontend
+class InviteCodeRequest(BaseModel):
+    invite_code: str
+
+class MessageBody(BaseModel):
+    message: str
+
+class MotivationalNoteBody(BaseModel):
+    to_user_id: str
+    message: str
+    group_id: Optional[str] = None
+
+class GroupTaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = Field(None, pattern="^(low|medium|high)$")
+    assigned_to: Optional[str] = None  # currently unused server-side
+    completed: Optional[bool] = None   # currently unused server-side
+
 class GroupTask(BaseModel):
     id: str
     title: str
@@ -179,6 +198,26 @@ async def get_user_data(user_id: str):
         }
     return None
 
+async def ensure_user_exists(current_user: dict):
+    """Ensure user exists in database, create if not"""
+    user_id = current_user['uid']
+    email = current_user['email']
+    
+    user_doc = db.collection("users").document(user_id).get()
+    if not user_doc.exists:
+        # Create user document
+        user_profile = {
+            "email": email,
+            "display_name": current_user.get('name', email.split('@')[0]),
+            "username": None,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "updated_at": firestore.SERVER_TIMESTAMP
+        }
+        db.collection("users").document(user_id).set(user_profile)
+        print(f"✅ Auto-created user profile for {email}")
+    
+    return user_id
+
 # Routes
 @app.get("/")
 async def root():
@@ -195,7 +234,7 @@ async def setup_user(user_data: UserCreate, current_user: dict = Depends(get_cur
         
         # Check if username is taken
         if user_data.username:
-            existing_user = db.collection("users").where("username", "==", user_data.username).limit(1).get()
+            existing_user = db.collection("users").where(field_path="username", op_string="==", value=user_data.username).limit(1).get()
             if existing_user and len(existing_user) > 0 and existing_user[0].id != user_id:
                 raise HTTPException(status_code=400, detail="Username already taken")
         
@@ -208,9 +247,18 @@ async def setup_user(user_data: UserCreate, current_user: dict = Depends(get_cur
         }
         
         db.collection("users").document(user_id).set(user_profile, merge=True)
-        user_profile["id"] = user_id
         
-        return {"message": "User profile updated successfully", "user": user_profile}
+        # Return profile without SERVER_TIMESTAMP to avoid serialization issues
+        response_profile = {
+            "id": user_id,
+            "email": email,
+            "display_name": display_name,
+            "username": user_data.username,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        return {"message": "User profile updated successfully", "user": response_profile}
     except HTTPException:
         raise
     except Exception as e:
@@ -221,7 +269,8 @@ async def setup_user(user_data: UserCreate, current_user: dict = Depends(get_cur
 async def get_user_profile(current_user: dict = Depends(get_current_user)):
     """Get current user profile with stats"""
     try:
-        user_id = current_user['uid']
+        # Ensure user exists in database
+        user_id = await ensure_user_exists(current_user)
         user_doc = db.collection("users").document(user_id).get()
         
         if not user_doc.exists:
@@ -230,11 +279,10 @@ async def get_user_profile(current_user: dict = Depends(get_current_user)):
         user_data = user_doc.to_dict()
         
         # Get friend count
-        friend_count = len(db.collection("friendships").where("user_id", "==", user_id).get())
+        friend_count = len(db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).get())
         
-        # Get group count
-        group_count = len(db.collection("groups").where("host_id", "==", user_id).get())
-        group_count += len(db.collection_group("members").where("user_id", "==", user_id).get())
+        # Get group count - only count hosted groups for now to avoid index issues
+        group_count = len(db.collection("groups").where(field_path="host_id", op_string="==", value=user_id).get())
         
         user_data.update({
             "id": user_id,
@@ -258,12 +306,12 @@ async def search_users(
         users = []
         
         # Search by email
-        email_results = db.collection("users").where("email", ">=", query).where("email", "<=", query + "\uf8ff").limit(10).get()
+        email_results = db.collection("users").where(field_path="email", op_string=">=", value=query).where(field_path="email", op_string="<=", value=query + "\uf8ff").limit(10).get()
         
         # Search by username if provided
         username_results = []
         if "@" not in query:  # Only search username if it's not an email format
-            username_results = db.collection("users").where("username", ">=", query).where("username", "<=", query + "\uf8ff").limit(10).get()
+            username_results = db.collection("users").where(field_path="username", op_string=">=", value=query).where(field_path="username", op_string="<=", value=query + "\uf8ff").limit(10).get()
         
         # Combine and deduplicate results
         all_docs = list(email_results) + list(username_results)
@@ -286,28 +334,34 @@ async def search_users(
         raise HTTPException(status_code=500, detail=str(e))
 
 # Friend Management
+class FriendRequestCreate(BaseModel):
+    user_email: str
+
 @app.post("/api/friends/request")
-async def send_friend_request(friend_email: str, current_user: dict = Depends(get_current_user)):
+async def send_friend_request(request: FriendRequestCreate, current_user: dict = Depends(get_current_user)):
     """Send a friend request"""
     try:
-        user_id = current_user['uid']
+        # Ensure current user exists in database
+        user_id = await ensure_user_exists(current_user)
+        friend_email = request.user_email
+        print(f"🔍 Sending friend request from {user_id} to {friend_email}")
         
         # Find user by email
-        friend_docs = db.collection("users").where("email", "==", friend_email).limit(1).get()
+        friend_docs = db.collection("users").where(field_path="email", op_string="==", value=friend_email).limit(1).get()
         if not friend_docs:
-            raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=404, detail=f"User with email '{friend_email}' not found. They need to sign up first.")
         
         friend_id = friend_docs[0].id
         if friend_id == user_id:
             raise HTTPException(status_code=400, detail="Cannot send friend request to yourself")
         
         # Check if friendship already exists
-        existing_friendship = db.collection("friendships").where("user_id", "==", user_id).where("friend_id", "==", friend_id).limit(1).get()
+        existing_friendship = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).where(field_path="friend_id", op_string="==", value=friend_id).limit(1).get()
         if existing_friendship:
             raise HTTPException(status_code=400, detail="Already friends")
         
         # Check for existing pending request
-        existing_request = db.collection("friend_requests").where("from_user_id", "==", user_id).where("to_user_id", "==", friend_id).where("status", "==", "pending").limit(1).get()
+        existing_request = db.collection("friend_requests").where(field_path="from_user_id", op_string="==", value=user_id).where(field_path="to_user_id", op_string="==", value=friend_id).where(field_path="status", op_string="==", value="pending").limit(1).get()
         if existing_request:
             raise HTTPException(status_code=400, detail="Friend request already sent")
         
@@ -320,9 +374,12 @@ async def send_friend_request(friend_email: str, current_user: dict = Depends(ge
         }
         
         doc_ref = db.collection("friend_requests").add(request_data)
-        request_data["id"] = doc_ref[1].id
+        # Fetch created doc to avoid returning Sentinel
+        created = db.collection("friend_requests").document(doc_ref[1].id).get()
+        created_payload = created.to_dict() or {}
+        created_payload["id"] = created.id
         
-        return {"message": "Friend request sent successfully", "request": request_data}
+        return {"message": "Friend request sent successfully", "request": created_payload}
     except HTTPException:
         raise
     except Exception as e:
@@ -336,7 +393,7 @@ async def get_friend_requests(current_user: dict = Depends(get_current_user)):
         user_id = current_user['uid']
         
         # Get incoming requests
-        incoming_requests = db.collection("friend_requests").where("to_user_id", "==", user_id).where("status", "==", "pending").get()
+        incoming_requests = db.collection("friend_requests").where(field_path="to_user_id", op_string="==", value=user_id).where(field_path="status", op_string="==", value="pending").get()
         
         requests = []
         for doc in incoming_requests:
@@ -354,14 +411,18 @@ async def get_friend_requests(current_user: dict = Depends(get_current_user)):
         print(f"❌ Error getting friend requests: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.put("/api/friends/requests/{request_id}")
-async def respond_to_friend_request(request_id: str, action: str, current_user: dict = Depends(get_current_user)):
+class FriendRequestResponse(BaseModel):
+    accept: bool
+
+@app.post("/api/friends/requests/{request_id}/respond")
+async def respond_to_friend_request(request_id: str, response: FriendRequestResponse, current_user: dict = Depends(get_current_user)):
     """Accept or reject a friend request"""
     try:
-        user_id = current_user['uid']
+        # Ensure user exists in database
+        user_id = await ensure_user_exists(current_user)
         
-        if action not in ["accept", "reject"]:
-            raise HTTPException(status_code=400, detail="Invalid action. Use 'accept' or 'reject'")
+        action = "accept" if response.accept else "reject"
+        print(f"🔍 {user_id} is {action}ing friend request {request_id}")
         
         # Get the request
         request_doc = db.collection("friend_requests").document(request_id).get()
@@ -408,7 +469,7 @@ async def get_friends(current_user: dict = Depends(get_current_user)):
     try:
         user_id = current_user['uid']
         
-        friendships = db.collection("friendships").where("user_id", "==", user_id).get()
+        friendships = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).get()
         
         friends = []
         for doc in friendships:
@@ -429,7 +490,7 @@ async def get_friends_progress(current_user: dict = Depends(get_current_user)):
         user_id = current_user['uid']
         today = get_today_date()
         
-        friendships = db.collection("friendships").where("user_id", "==", user_id).get()
+        friendships = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).get()
         
         friends_progress = []
         for doc in friendships:
@@ -469,6 +530,48 @@ async def get_friends_progress(current_user: dict = Depends(get_current_user)):
         print(f"❌ Error getting friends progress: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/api/friends/{friend_id}")
+async def remove_friend(friend_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove a friend relationship in both directions"""
+    try:
+        user_id = current_user['uid']
+        # Delete current->friend
+        docs1 = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).where(field_path="friend_id", op_string="==", value=friend_id).get()
+        for d in docs1:
+            db.collection("friendships").document(d.id).delete()
+        # Delete friend->current
+        docs2 = db.collection("friendships").where(field_path="user_id", op_string="==", value=friend_id).where(field_path="friend_id", op_string="==", value=user_id).get()
+        for d in docs2:
+            db.collection("friendships").document(d.id).delete()
+        return {"message": "Friend removed successfully"}
+    except Exception as e:
+        print(f"❌ Error removing friend: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tasks/friend/{friend_id}")
+async def get_friend_tasks(friend_id: str, current_user: dict = Depends(get_current_user)):
+    """Get today's tasks for a friend (requires friendship) and return as array"""
+    try:
+        user_id = current_user['uid']
+        # Verify friendship
+        friendship = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).where(field_path="friend_id", op_string="==", value=friend_id).limit(1).get()
+        if not friendship:
+            raise HTTPException(status_code=403, detail="Not friends")
+        
+        today = get_today_date()
+        tasks: List[Dict[str, Any]] = []
+        docs = get_user_tasks_collection(friend_id, today).stream()
+        for doc in docs:
+            data = doc.to_dict()
+            data["id"] = doc.id
+            tasks.append(data)
+        return tasks
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting friend's tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Group Management
 @app.post("/api/groups")
 async def create_group(group_data: GroupCreate, current_user: dict = Depends(get_current_user)):
@@ -498,20 +601,30 @@ async def create_group(group_data: GroupCreate, current_user: dict = Depends(get
         }
         db.collection("groups").document(group_id).collection("members").document(user_id).set(member_data)
         
-        group_info["id"] = group_id
-        return {"message": "Group created successfully", "group": group_info}
+        # Fetch created group to avoid Sentinel in response
+        gdoc = db.collection("groups").document(group_id).get()
+        safe_group = gdoc.to_dict() or {}
+        safe_group["id"] = group_id
+        # Include convenience fields expected by frontend
+        members_docs = db.collection("groups").document(group_id).collection("members").get()
+        safe_group["members"] = [m.get("user_id") for m in [d.to_dict() for d in members_docs] if m]
+        safe_group["member_count"] = len(members_docs)
+        safe_group["host"] = await get_user_data(safe_group.get("host_id"))
+        
+        return {"message": "Group created successfully", "group": safe_group}
     except Exception as e:
         print(f"❌ Error creating group: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/groups/join")
-async def join_group(invite_code: str, current_user: dict = Depends(get_current_user)):
-    """Join a group using invite code"""
+async def join_group(invite: InviteCodeRequest, current_user: dict = Depends(get_current_user)):
+    """Join a group using invite code (accept JSON body)"""
     try:
         user_id = current_user['uid']
+        invite_code = invite.invite_code
         
         # Find group by invite code
-        groups = db.collection("groups").where("invite_code", "==", invite_code).limit(1).get()
+        groups = db.collection("groups").where(field_path="invite_code", op_string="==", value=invite_code).limit(1).get()
         if not groups:
             raise HTTPException(status_code=404, detail="Invalid invite code")
         
@@ -543,32 +656,56 @@ async def get_user_groups(current_user: dict = Depends(get_current_user)):
     """Get all groups user is a member of"""
     try:
         user_id = current_user['uid']
-        
-        # Get all group memberships
-        member_docs = db.collection_group("members").where("user_id", "==", user_id).get()
-        
         groups = []
-        for member_doc in member_docs:
-            group_id = member_doc.reference.parent.parent.id
-            group_doc = db.collection("groups").document(group_id).get()
+        
+        # First, get groups where user is the host
+        hosted_groups = db.collection("groups").where(field_path="host_id", op_string="==", value=user_id).get()
+        
+        for group_doc in hosted_groups:
+            group_data = group_doc.to_dict()
+            group_data["id"] = group_doc.id
             
-            if group_doc.exists:
-                group_data = group_doc.to_dict()
-                group_data["id"] = group_id
-                
-                # Get member count
-                members = db.collection("groups").document(group_id).collection("members").get()
-                group_data["member_count"] = len(members)
-                
-                # Get host info
-                group_data["host"] = await get_user_data(group_data["host_id"])
-                
-                groups.append(group_data)
+            # Get member ids
+            members = db.collection("groups").document(group_doc.id).collection("members").get()
+            group_data["member_count"] = len(members)
+            group_data["members"] = [m.get("user_id") for m in [d.to_dict() for d in members] if m]
+            
+            # Get host info
+            group_data["host"] = await get_user_data(group_data["host_id"])
+            
+            groups.append(group_data)
+        
+        # Then, get all groups and check if user is a member (less efficient but works without indexes)
+        all_groups = db.collection("groups").get()
+        
+        for group_doc in all_groups:
+            group_id = group_doc.id
+            
+            if any(g["id"] == group_id for g in groups):
+                continue
+            
+            # Check if user is a member of this group
+            try:
+                member_doc = db.collection("groups").document(group_id).collection("members").document(user_id).get()
+                if member_doc.exists:
+                    group_data = group_doc.to_dict()
+                    group_data["id"] = group_id
+                    
+                    members = db.collection("groups").document(group_id).collection("members").get()
+                    group_data["member_count"] = len(members)
+                    group_data["members"] = [m.get("user_id") for m in [d.to_dict() for d in members] if m]
+                    
+                    group_data["host"] = await get_user_data(group_data["host_id"])
+                    
+                    groups.append(group_data)
+            except:
+                continue
         
         return {"groups": groups}
     except Exception as e:
         print(f"❌ Error getting user groups: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return empty groups instead of 500 error
+        return {"groups": []}
 
 @app.get("/api/groups/{group_id}")
 async def get_group_details(group_id: str, current_user: dict = Depends(get_current_user)):
@@ -607,12 +744,75 @@ async def get_group_details(group_id: str, current_user: dict = Depends(get_curr
         print(f"❌ Error getting group details: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/groups/{group_id}/members")
+async def get_group_members(group_id: str, current_user: dict = Depends(get_current_user)):
+    """Return list of group members (as array)"""
+    try:
+        user_id = current_user['uid']
+        # Verify membership
+        member_doc = db.collection("groups").document(group_id).collection("members").document(user_id).get()
+        if not member_doc.exists:
+            raise HTTPException(status_code=403, detail="Not a member of this group")
+        
+        member_docs = db.collection("groups").document(group_id).collection("members").get()
+        members = []
+        for doc in member_docs:
+            data = doc.to_dict()
+            u = await get_user_data(data["user_id"])
+            if u:
+                members.append({
+                    "id": u["id"],
+                    "email": u.get("email"),
+                    "display_name": u.get("display_name"),
+                    "username": u.get("username")
+                })
+        return members
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting group members: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/groups/{group_id}/leave")
+async def leave_group(group_id: str, current_user: dict = Depends(get_current_user)):
+    """Leave a group. Host cannot leave if other members remain."""
+    try:
+        user_id = current_user['uid']
+        group_ref = db.collection("groups").document(group_id)
+        group_doc = group_ref.get()
+        if not group_doc.exists:
+            raise HTTPException(status_code=404, detail="Group not found")
+        group = group_doc.to_dict()
+        
+        if group.get("host_id") == user_id:
+            # Count members
+            members = db.collection("groups").document(group_id).collection("members").get()
+            if len(members) > 1:
+                raise HTTPException(status_code=400, detail="Host cannot leave while other members remain")
+            # Single-member group: delete membership and group
+            try:
+                db.collection("groups").document(group_id).collection("members").document(user_id).delete()
+            except Exception:
+                pass
+            group_ref.delete()
+            return {"message": "Group deleted"}
+        
+        # Remove member entry
+        db.collection("groups").document(group_id).collection("members").document(user_id).delete()
+        return {"message": "Left group successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error leaving group: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Enhanced Task Management
 @app.post("/api/tasks")
 async def create_task(task: TaskCreate, current_user: dict = Depends(get_current_user)):
     """Create a new personal task"""
     try:
-        user_id = current_user['uid']
+        # Ensure user exists in database
+        user_id = await ensure_user_exists(current_user)
         today = get_today_date()
         
         task_data = {
@@ -626,9 +826,12 @@ async def create_task(task: TaskCreate, current_user: dict = Depends(get_current
         }
         
         doc_ref = get_user_tasks_collection(user_id, today).add(task_data)
-        task_data["id"] = doc_ref[1].id
+        # Fetch created doc to avoid Sentinel in response
+        new_doc = get_user_tasks_collection(user_id, today).document(doc_ref[1].id).get()
+        created_task = new_doc.to_dict() or {}
+        created_task["id"] = new_doc.id
         
-        return {"message": "Task created successfully", "task": task_data}
+        return {"message": "Task created successfully", "task": created_task}
     except Exception as e:
         print(f"❌ Error creating task: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -725,13 +928,77 @@ async def create_group_task(group_id: str, task: GroupTaskCreate, current_user: 
         }
         
         doc_ref = db.collection("groups").document(group_id).collection("tasks").add(task_data)
-        task_data["id"] = doc_ref[1].id
+        # Fetch created doc to avoid Sentinel
+        new_doc = db.collection("groups").document(group_id).collection("tasks").document(doc_ref[1].id).get()
+        created_task = new_doc.to_dict() or {}
+        created_task["id"] = new_doc.id
         
-        return {"message": "Group task created successfully", "task": task_data}
+        return {"message": "Group task created successfully", "task": created_task}
     except HTTPException:
         raise
     except Exception as e:
         print(f"❌ Error creating group task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/groups/{group_id}/tasks/{task_id}")
+async def update_group_task(group_id: str, task_id: str, task_update: GroupTaskUpdate, current_user: dict = Depends(get_current_user)):
+    """Update a group task (host only)."""
+    try:
+        user_id = current_user['uid']
+        group_doc = db.collection("groups").document(group_id).get()
+        if not group_doc.exists:
+            raise HTTPException(status_code=404, detail="Group not found")
+        if group_doc.to_dict().get("host_id") != user_id:
+            raise HTTPException(status_code=403, detail="Only group host can update group tasks")
+        
+        task_ref = db.collection("groups").document(group_id).collection("tasks").document(task_id)
+        task_doc = task_ref.get()
+        if not task_doc.exists:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        update_data: Dict[str, Any] = {}
+        if task_update.title is not None:
+            update_data["title"] = task_update.title
+        if task_update.description is not None:
+            update_data["description"] = task_update.description
+        if task_update.priority is not None:
+            update_data["priority"] = task_update.priority
+        if not update_data:
+            return {"message": "No changes"}
+        update_data["updated_at"] = firestore.SERVER_TIMESTAMP
+        
+        task_ref.update(update_data)
+        new_doc = task_ref.get()
+        task_data = new_doc.to_dict()
+        task_data["id"] = new_doc.id
+        return {"message": "Group task updated", "task": task_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error updating group task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/groups/{group_id}/tasks/{task_id}")
+async def delete_group_task(group_id: str, task_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a group task (host only)."""
+    try:
+        user_id = current_user['uid']
+        group_doc = db.collection("groups").document(group_id).get()
+        if not group_doc.exists:
+            raise HTTPException(status_code=404, detail="Group not found")
+        if group_doc.to_dict().get("host_id") != user_id:
+            raise HTTPException(status_code=403, detail="Only group host can delete group tasks")
+        
+        task_ref = db.collection("groups").document(group_id).collection("tasks").document(task_id)
+        task_doc = task_ref.get()
+        if not task_doc.exists:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task_ref.delete()
+        return {"message": "Group task deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error deleting group task: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/groups/{group_id}/tasks")
@@ -791,7 +1058,7 @@ async def get_group_progress(group_id: str, current_user: dict = Depends(get_cur
                 continue
             
             # Get member's personal tasks that are related to group tasks
-            member_tasks = get_user_tasks_collection(member_id, today).where("group_id", "==", group_id).get()
+            member_tasks = get_user_tasks_collection(member_id, today).where(field_path="group_id", op_string="==", value=group_id).get()
             
             tasks = []
             for task_doc in member_tasks:
@@ -827,15 +1094,13 @@ async def get_group_progress(group_id: str, current_user: dict = Depends(get_cur
 
 # Enhanced Motivational Notes
 @app.post("/api/motivational-notes")
-async def send_motivational_note(
-    message: str, 
-    to_user_id: str, 
-    group_id: Optional[str] = None, 
-    current_user: dict = Depends(get_current_user)
-):
-    """Send a motivational note to a friend or group member"""
+async def send_motivational_note(body: MotivationalNoteBody, current_user: dict = Depends(get_current_user)):
+    """Send a motivational note to a friend or group member (accept JSON body)"""
     try:
         user_id = current_user['uid']
+        to_user_id = body.to_user_id
+        message = body.message
+        group_id = body.group_id
         
         if to_user_id == user_id:
             raise HTTPException(status_code=400, detail="Cannot send note to yourself")
@@ -850,7 +1115,7 @@ async def send_motivational_note(
                 raise HTTPException(status_code=403, detail="Both users must be in the same group")
         else:
             # Check if users are friends
-            friendship = db.collection("friendships").where("user_id", "==", user_id).where("friend_id", "==", to_user_id).limit(1).get()
+            friendship = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).where(field_path="friend_id", op_string="==", value=to_user_id).limit(1).get()
             if not friendship:
                 raise HTTPException(status_code=403, detail="Can only send notes to friends")
         
@@ -864,13 +1129,36 @@ async def send_motivational_note(
         }
         
         doc_ref = db.collection("motivational_notes").add(note_data)
-        note_data["id"] = doc_ref[1].id
+        # Fetch created note to avoid Sentinel
+        new_doc = db.collection("motivational_notes").document(doc_ref[1].id).get()
+        note_payload = new_doc.to_dict() or {}
+        note_payload["id"] = new_doc.id
         
-        return {"message": "Motivational note sent successfully", "note": note_data}
+        return {"message": "Motivational note sent successfully", "note": note_payload}
     except HTTPException:
         raise
     except Exception as e:
         print(f"❌ Error sending motivational note: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/motivational-notes/{note_id}/read")
+async def mark_note_as_read(note_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark a motivational note as read"""
+    try:
+        user_id = current_user['uid']
+        note_ref = db.collection("motivational_notes").document(note_id)
+        note_doc = note_ref.get()
+        if not note_doc.exists:
+            raise HTTPException(status_code=404, detail="Note not found")
+        note = note_doc.to_dict()
+        if note.get("to_user_id") != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to mark this note")
+        note_ref.update({"read": True, "updated_at": firestore.SERVER_TIMESTAMP})
+        return {"message": "Note marked as read"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error marking note as read: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/motivational-notes")
@@ -880,7 +1168,7 @@ async def get_motivational_notes(current_user: dict = Depends(get_current_user))
         user_id = current_user['uid']
         
         notes = []
-        note_docs = db.collection("motivational_notes").where("to_user_id", "==", user_id).order_by("created_at", direction=firestore.Query.DESCENDING).limit(50).get()
+        note_docs = db.collection("motivational_notes").where(field_path="to_user_id", op_string="==", value=user_id).order_by("created_at", direction=firestore.Query.DESCENDING).limit(50).get()
         
         for doc in note_docs:
             note_data = doc.to_dict()
@@ -899,8 +1187,8 @@ async def get_motivational_notes(current_user: dict = Depends(get_current_user))
 
 # Group Messaging
 @app.post("/api/groups/{group_id}/messages")
-async def send_group_message(group_id: str, message: str, current_user: dict = Depends(get_current_user)):
-    """Send a message to group chat"""
+async def send_group_message(group_id: str, body: MessageBody, current_user: dict = Depends(get_current_user)):
+    """Send a message to group chat (accept JSON body)"""
     try:
         user_id = current_user['uid']
         
@@ -911,18 +1199,19 @@ async def send_group_message(group_id: str, message: str, current_user: dict = D
         
         message_data = {
             "user_id": user_id,
-            "message": message,
+            "message": body.message,
             "group_id": group_id,
             "created_at": firestore.SERVER_TIMESTAMP
         }
         
         doc_ref = db.collection("groups").document(group_id).collection("messages").add(message_data)
-        message_data["id"] = doc_ref[1].id
+        # Fetch created doc to avoid Sentinel
+        new_doc = db.collection("groups").document(group_id).collection("messages").document(doc_ref[1].id).get()
+        message_payload = new_doc.to_dict() or {}
+        message_payload["id"] = new_doc.id
+        message_payload["user"] = await get_user_data(user_id)
         
-        # Get user info
-        message_data["user"] = await get_user_data(user_id)
-        
-        return {"message": "Message sent successfully", "group_message": message_data}
+        return {"message": "Message sent successfully", "group_message": message_payload}
     except HTTPException:
         raise
     except Exception as e:
@@ -957,6 +1246,38 @@ async def get_group_messages(group_id: str, limit: int = 50, current_user: dict 
         raise
     except Exception as e:
         print(f"❌ Error getting group messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# History endpoints
+@app.get("/api/history")
+async def get_user_history(current_user: dict = Depends(get_current_user)):
+    """Get user's task completion history"""
+    try:
+        user_id = current_user['uid']
+        
+        # Get user's daily tasks for the last 30 days
+        history = []
+        
+        # For now, return empty history - can be expanded later
+        return {"history": history}
+    except Exception as e:
+        print(f"❌ Error getting user history: {e}")
+        return {"history": []}
+
+@app.get("/api/history/friend/{friend_id}")
+async def get_friend_history(friend_id: str, current_user: dict = Depends(get_current_user)):
+    """Return friend's history (placeholder empty list) if users are friends"""
+    try:
+        user_id = current_user['uid']
+        # Verify friendship
+        friendship = db.collection("friendships").where(field_path="user_id", op_string="==", value=user_id).where(field_path="friend_id", op_string="==", value=friend_id).limit(1).get()
+        if not friendship:
+            raise HTTPException(status_code=403, detail="Not friends")
+        return []
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting friend's history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

@@ -53,10 +53,14 @@ export interface FriendRequest {
   id: string;
   from_user_id: string;
   to_user_id: string;
-  from_user_email: string;
-  from_user_name: string;
   status: 'pending' | 'accepted' | 'rejected';
   created_at: string;
+  from_user?: {
+    id: string;
+    email: string;
+    display_name?: string;
+    username?: string;
+  };
 }
 
 export interface Group {
@@ -131,14 +135,14 @@ export interface GroupProgress {
 // API functions
 export const apiService = {
   // User management
-  getUserProfile: async (): Promise<UserProfile> => {
+  getUserProfile: async (): Promise<{user: UserProfile}> => {
     const response = await api.get('/user/profile');
     return response.data;
   },
 
   updateProfile: async (data: { display_name?: string; username?: string }): Promise<UserProfile> => {
-    const response = await api.put('/user/profile', data);
-    return response.data;
+    const response = await api.post('/users/setup', data);
+    return response.data.user;
   },
 
   searchUsers: async (query: string): Promise<{users: Friend[]}> => {

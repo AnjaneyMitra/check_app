@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { apiService, Friend, FriendRequest, Group } from '../services/api';
+import { apiService, Friend, FriendRequest, Group, UserProfile } from '../services/api';
 
 const Container = styled.div`
   display: flex;
@@ -216,14 +216,17 @@ const Badge = styled.span`
 `;
 
 const FriendsGroups: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'friends' | 'groups' | 'requests'>('friends');
+  const [activeTab, setActiveTab] = useState<'friends' | 'groups' | 'requests' | 'profile'>('friends');
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
+  const [userProfile, setUserProfile] = useState<any>(null);
   const [friendEmail, setFriendEmail] = useState('');
   const [groupName, setGroupName] = useState('');
   const [groupDescription, setGroupDescription] = useState('');
   const [joinCode, setJoinCode] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -232,15 +235,21 @@ const FriendsGroups: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [friendsData, groupsData, requestsData] = await Promise.all([
+      const [friendsData, groupsData, requestsData, profileData] = await Promise.all([
         apiService.getFriends(),
         apiService.getGroups(),
-        apiService.getFriendRequests()
+        apiService.getFriendRequests(),
+        apiService.getUserProfile()
       ]);
       
       setFriends(friendsData.friends || []);
       setGroups(groupsData.groups || []);
       setFriendRequests(requestsData.requests || []);
+      
+      const profile = profileData.user;
+      setUserProfile(profile);
+      setDisplayName(profile?.display_name || '');
+      setUsername(profile?.username || '');
     } catch (error) {
       console.error('Failed to load data:', error);
     }
@@ -256,9 +265,10 @@ const FriendsGroups: React.FC = () => {
       setFriendEmail('');
       alert('Friend request sent! 🎉');
       await loadData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to send friend request:', error);
-      alert('Failed to send friend request. Please check the email and try again.');
+      const errorMessage = error.response?.data?.detail || 'Failed to send friend request. Please check the email and try again.';
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -332,6 +342,26 @@ const FriendsGroups: React.FC = () => {
     }
   };
 
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    try {
+      setLoading(true);
+      await apiService.updateProfile({
+        display_name: displayName.trim() || undefined,
+        username: username.trim() || undefined
+      });
+      alert('Profile updated successfully! 🎉');
+      await loadData();
+    } catch (error: any) {
+      console.error('Failed to update profile:', error);
+      const errorMessage = error.response?.data?.detail || 'Failed to update profile. Please try again.';
+      alert(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Container>
       <Title>👥 Friends & Groups</Title>
@@ -346,6 +376,9 @@ const FriendsGroups: React.FC = () => {
         <Tab $active={activeTab === 'requests'} onClick={() => setActiveTab('requests')}>
           Requests
           {friendRequests.length > 0 && <Badge>{friendRequests.length}</Badge>}
+        </Tab>
+        <Tab $active={activeTab === 'profile'} onClick={() => setActiveTab('profile')}>
+          Profile
         </Tab>
       </TabContainer>
 
@@ -492,9 +525,11 @@ const FriendsGroups: React.FC = () => {
               friendRequests.map((request) => (
                 <ListItem key={request.id}>
                   <ItemInfo>
-                    <ItemName>{request.from_user_name}</ItemName>
+                    <ItemName>
+                      {request.from_user?.display_name || request.from_user?.username || request.from_user?.email || 'Unknown User'}
+                    </ItemName>
                     <ItemDetail>
-                      {request.from_user_email} • {new Date(request.created_at).toLocaleDateString()}
+                      {request.from_user?.email || 'No email'} • {new Date(request.created_at).toLocaleDateString()}
                     </ItemDetail>
                   </ItemInfo>
                   <ItemActions>
@@ -509,6 +544,82 @@ const FriendsGroups: React.FC = () => {
               ))
             )}
           </List>
+        </Section>
+      )}
+
+      {activeTab === 'profile' && (
+        <Section>
+          <SectionTitle>
+            <span>👤</span>
+            My Profile
+          </SectionTitle>
+          <Form onSubmit={handleUpdateProfile}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
+              <div>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '6px', 
+                  fontSize: '14px', 
+                  fontWeight: '500', 
+                  color: '#37352f' 
+                }}>
+                  Display Name
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Enter your display name"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '6px', 
+                  fontSize: '14px', 
+                  fontWeight: '500', 
+                  color: '#37352f' 
+                }}>
+                  Username
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Enter your username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+                <div style={{ 
+                  fontSize: '12px', 
+                  color: '#787774', 
+                  marginTop: '4px' 
+                }}>
+                  Your username helps friends find you easily
+                </div>
+              </div>
+              <div style={{ 
+                padding: '16px', 
+                background: '#f8f8f7', 
+                borderRadius: '6px', 
+                border: '1px solid #e9e9e7' 
+              }}>
+                <div style={{ fontSize: '14px', fontWeight: '500', color: '#37352f', marginBottom: '8px' }}>
+                  Account Info
+                </div>
+                <div style={{ fontSize: '14px', color: '#787774' }}>
+                  <div>Email: {userProfile?.email}</div>
+                  {userProfile?.friend_count !== undefined && (
+                    <div>Friends: {userProfile.friend_count}</div>
+                  )}
+                  {userProfile?.group_count !== undefined && (
+                    <div>Groups: {userProfile.group_count}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <Button type="submit" disabled={loading}>
+              {loading ? 'Updating...' : 'Update Profile'}
+            </Button>
+          </Form>
         </Section>
       )}
     </Container>
